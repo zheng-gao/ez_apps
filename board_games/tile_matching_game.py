@@ -143,11 +143,11 @@ class TileMatching:
 
 
 
-PARSER = argparse.ArgumentParser(description="Tile Matching Game")
-PARSER.add_argument("-r", "--row", dest="row", type=int, default=10)
-PARSER.add_argument("-c", "--column", dest="col", type=int, default=10)
-ARGUMENTS = PARSER.parse_args()
+parser = argparse.ArgumentParser(description="Tile Matching")
+parser.add_argument("-r", "--row", dest="row", type=int, default=10, help="Number of rows")
+parser.add_argument("-c", "--column", dest="col", type=int, default=10, help="Number of columns")
+args = parser.parse_args()
 if __name__ == "__main__":
-    TileMatching(row=ARGUMENTS.row, col=ARGUMENTS.col).run()
+    TileMatching(row=args.row, col=args.col).run()
 
 
