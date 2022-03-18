@@ -106,6 +106,7 @@ class FileSystem:
             node.content = node.content + content if node.content else content
 
 
+"""
 fs = FileSystem()
 fs.mkdir("/var/tmp", True)
 fs.echo_to("/var/tmp/test", "hello world")
@@ -137,6 +138,7 @@ fs.ls()
 fs.cd("..")
 fs.pwd()
 
+"""
 
 """
 Distributed system: HDFS, Spark, Tachyon
