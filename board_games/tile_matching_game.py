@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import sys
 from enum import Enum
 
 COLOR = {
@@ -65,6 +66,8 @@ class TileMatching:
                     self.board[row][col] = random.randrange(len(self.tiles))
 
     def validate_selection(self, selection: str) -> (bool, int):
+        if selection == "exit":
+            sys.exit()
         numbers = selection.split(",")
         if len(numbers) != 2:
             raise TileMatchingError(f"[Error] Invalid delimiter: \"{selection}\"")
@@ -87,8 +90,7 @@ class TileMatching:
             prompt = f"Please select row from [0 ~ {self.row_len - 1}] and " \
                    + f"column from [0 ~ {self.col_len - 1}], separated by comma: "
             try:
-                row, col = self.validate_selection(input(prompt))
-                return row, col
+                return self.validate_selection(input(prompt))
             except TileMatchingError as e:
                 print(e)
 

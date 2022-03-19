@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from typing import List
 
 
@@ -71,6 +72,8 @@ class ConnectFour:
         self.turn = (self.turn + 1) % len(self.players)
 
     def validate_selection(self, selection: str) -> (bool, int):
+        if selection == "exit":
+            sys.exit()
         try:
             column = int(selection)
         except ValueError:
