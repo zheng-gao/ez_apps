@@ -53,8 +53,9 @@ class TileMatching:
             output += "\n"
         return output
 
-    def print_board(self):
-        os.system("clear")
+    def print_board(self, clear=False):
+        if clear:
+            os.system("clear")
         print(self)
 
     def build_board(self):
