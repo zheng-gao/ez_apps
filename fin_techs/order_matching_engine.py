@@ -31,7 +31,7 @@ class Order:
 
     def check_type(self, other):
         if not isinstance(other, type(self)): 
-            raise NotImplemented(f"{other} is not type {type(self)}")
+            raise NotImplementedError(f"{other} is not type {type(self)}")
 
     def __gt__(self, other):
         self.check_type(other)

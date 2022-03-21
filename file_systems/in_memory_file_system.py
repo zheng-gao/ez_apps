@@ -1,4 +1,6 @@
 # https://docs.pyfilesystem.org/en/latest/reference/errors.html
+from functools import cmp_to_key
+
 
 class iNode:
     def __init__(self, name: str, parent=None, is_file=False, content=None):
@@ -6,11 +8,11 @@ class iNode:
         self.is_file = is_file
         self.content = content
         self.parent = parent
-        self.inodes = dict()  # <string, iNode>
+        self.inodes = dict()  # <name, iNode>
 
     def __str__(self):
         df = "f" if self.is_file else "d"
-        return f"{df}  {self.name}"
+        return f"[{df}] {self.name}"
 
     def get_inode(self, path: str):
         node = self
@@ -23,6 +25,20 @@ class iNode:
                 else:
                     node = node.inodes[d]
         return node
+
+    @staticmethod
+    def cmp(inode1, inode2):
+        if not isinstance(inode1, iNode) or not isinstance(inode2, iNode):
+            raise NotImplementedError
+        if not inode1.is_file and inode2.is_file:
+            return 1
+        if inode1.is_file and not inode2.is_file:
+            return -1
+        if inode1.name > inode2.name:
+            return 1
+        if inode1.name < inode2.name:
+            return -1
+        return 0
 
 
 class FileSystem:
@@ -55,14 +71,16 @@ class FileSystem:
     def ls(self, path: str = ""):
         inode = self.get_inode(path)
         result = [inode] if inode.is_file else list(inode.inodes.values())
+        result.sort(key=cmp_to_key(iNode.cmp))
         for r in result:
             print(r)
 
     def rm(self, path: str):
-        dir_node = self.get_inode(self.dirname(path))
-        if dir_node.is_file:
-            raise DirectoryExpected
-        del dir_node.inodes[self.basename(path)]
+        parent_path = self.dirname(path)
+        parent_node = self.get_inode(parent_path)
+        if parent_node.is_file:
+            raise DirectoryExpected(parent_path)
+        del parent_node.inodes[self.basename(path)]
 
     def mkdir(self, path: str, create_intermediate_directories=False):
         if create_intermediate_directories:
@@ -70,23 +88,23 @@ class FileSystem:
             for d in path.split("/"):
                 if d:
                     if d not in node.inodes:
-                        node.inodes[d] = iNode(d, node)
+                        node.inodes[d] = iNode(name=d, parent=node)
                     node = node.inodes[d]
         else:
-            dir_path = self.dirname(path)
-            dir_node = self.get_inode(dir_path)
-            if dir_node.is_file:
-                raise DirectoryExpected(dir_path)
+            parent_path = self.dirname(path)
+            parent_node = self.get_inode(parent_path)
+            if parent_node.is_file:
+                raise DirectoryExpected(parent_path)
             basename = self.basename(path)
-            dir_node.inodes[basename] = iNode(name=basename, parent=dir_node)
+            parent_node.inodes[basename] = iNode(name=basename, parent=parent_node, is_file=False)
 
     def touch(self, path: str):
-        dir_path = self.dirname(path)
-        dir_node = self.get_inode(dir_path)
-        if dir_node.is_file:
-            raise DirectoryExpected(dir_path)
+        parent_path = self.dirname(path)
+        parent_node = self.get_inode(parent_path)
+        if parent_node.is_file:
+            raise DirectoryExpected(parent_path)
         basename = self.basename(path)
-        dir_node.inodes[basename] = iNode(name=basename, parent=dir_node, is_file=True)
+        parent_node.inodes[basename] = iNode(name=basename, parent=parent_node, is_file=True)
 
     def cat(self, path: str):
         inode = self.get_inode(path)
@@ -95,25 +113,46 @@ class FileSystem:
         print(inode.content)
 
     def echo_to(self, path: str, content: str):
+        parent_path = self.dirname(path)
+        parent_node = self.get_inode(parent_path)
+        if parent_node.is_file:
+            raise DirectoryExpected(parent_path)
         basename = self.basename(path)
-        dir_node = self.root.get_inode(self.dirname(path))
-        if basename not in dir_node.inodes:
-            dir_node.inodes[basename] = iNode(name=basename, parent=dir_node, is_file=True, content=content)
+        if basename not in parent_node.inodes:
+            parent_node.inodes[basename] = iNode(name=basename, parent=parent_node, is_file=True, content=content)
         else:
-            node = dir_node.inodes[basename]
+            node = parent_node.inodes[basename]
             if not node.is_file:
                 raise FileExpected(path)
             node.content = node.content + content if node.content else content
 
+    def tree(self, path: str):
+        def _dfs(inode, last_one):
+            if len(last_one) > 0:
+                indentation = ""
+                for bar in last_one[:-1]:
+                    indentation += "    " if bar else "│   "
+                connector = "└" if last_one[-1] else "├"
+                print(indentation + f"{connector}── " + inode.name)
+            children = list(inode.inodes.values())
+            children.sort(key=cmp_to_key(iNode.cmp))
+            for i, node in enumerate(children):
+                last_one.append(i == len(children) - 1)
+                _dfs(node, last_one)
+                last_one.pop()
+        print(path)
+        _dfs(self.get_inode(path), last_one=list())
+
 
 """
+exec(open("in_memory_file_system.py").read())
 fs = FileSystem()
 fs.mkdir("/var/tmp", True)
-fs.echo_to("/var/tmp/test", "hello world")
+fs.echo_to("/var/tmp/test.txt", "hello world")
 fs.cd("/var/tmp")
 fs.pwd()
 fs.ls()
-fs.cat("test")
+fs.cat("test.txt")
 fs.cd("../..")
 fs.pwd()
 fs.mkdir("/home")
@@ -126,6 +165,7 @@ fs.cd("/home")
 fs.pwd()
 fs.ls()
 fs.cd("user_1")
+fs.echo_to("test.txt", "test user_1")
 fs.pwd()
 fs.ls()
 fs.cat(".profile")
@@ -134,17 +174,10 @@ fs.ls("/home/user_3")
 fs.rm("/home/user_3")
 fs.cd("..")
 fs.pwd()
+fs.cat("user_1/test.txt")
 fs.ls()
 fs.cd("..")
 fs.pwd()
-
+fs.tree("home")
+fs.tree("/")
 """
-
-"""
-Distributed system: HDFS, Spark, Tachyon
-
-save part of the tree to other hosts: /home/user_1
-
-Turn it into service: REST API
-"""
-
