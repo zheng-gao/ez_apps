@@ -2,7 +2,7 @@ import json
 import logging
 from copy import deepcopy
 from datetime import datetime, timedelta
-from ezcode.heap import PriorityQueue
+from ezcode.heap import PriorityMap
 from prettytable import PrettyTable
 from threading import current_thread, Lock
 from time import sleep
@@ -72,14 +72,15 @@ class MatchingEngine:
         self.history = list()
         self.queues = dict()  # {symbol: {ask: min_q, bid: max_q}}
         self.locks = dict()   # {symbol: {ask: lock, bid: lock}}
+        self.db = dict()      # mimic the order database {order_id: order}
 
     def load_symbols(self, symbols: List[str]):
         for symbol in symbols:
             if symbol not in self.queues:
                 self.queues[symbol] = dict()
                 self.locks[symbol] = dict()
-            self.queues[symbol]["ask"] = PriorityQueue(min_heap=True)
-            self.queues[symbol]["bid"] = PriorityQueue(min_heap=False)
+            self.queues[symbol]["ask"] = PriorityMap(min_heap=True)
+            self.queues[symbol]["bid"] = PriorityMap(min_heap=False)
             self.locks[symbol]["ask"] = Lock()
             self.locks[symbol]["bid"] = Lock()
 
@@ -89,21 +90,21 @@ class MatchingEngine:
             history_str += json.dumps(match_result, indent=4) + "\n"
         return history_str if history_str else "No Transaction Found!\n"
 
-    
-    def match(self, order, queue):
+    def _match(self, order, queue):
         while len(queue) > 0:
-            if not queue.peek().is_valid():
-                expired_order = queue.pop()
-                self.logger.info(f"Order Expired: {expired_order}")
+            q_top_order, _ = queue.peek()
+            if not q_top_order.is_valid():
+                queue.pop()
+                self.logger.info(f"Order Expired: {q_top_order}")
             else:
-                if (order.offer_type == "ask" and order.price <= queue.peek().price) or (order.offer_type == "bid" and order.price >= queue.peek().price):
-                    q_top_order = queue.pop()
+                if (order.offer_type == "ask" and order.price <= q_top_order.price) or (order.offer_type == "bid" and order.price >= q_top_order.price):
+                    queue.pop()
                     order_copy, q_top_order_copy = deepcopy(order), deepcopy(q_top_order)
                     volume_filled = min(order.volume, q_top_order.volume)
                     order.volume -= volume_filled
                     q_top_order.volume -= volume_filled
                     if q_top_order.volume > 0:
-                        queue.push(q_top_order)  # push back residual volume
+                        queue.push(q_top_order, q_top_order.order_id)  # push back residual volume
                     match_result = {
                         "accepted_order": json.loads(str(order_copy)),
                         "matched_order": json.loads(str(q_top_order_copy)),
@@ -121,25 +122,37 @@ class MatchingEngine:
 
     def accept_order(self, order: Order):
         self.logger.info(f"[{current_thread().name} {current_thread().native_id}] Accepted Order: {order}")
+        self.db[order.order_id] = order  # persist the order
         other_offer_type = "ask" if order.offer_type == "bid" else "bid"
         self.locks[order.symbol][other_offer_type].acquire()
-        self.match(order, self.queues[order.symbol][other_offer_type])
+        self._match(order, self.queues[order.symbol][other_offer_type])
         self.locks[order.symbol][other_offer_type].release()
         if order.volume > 0:
             self.locks[order.symbol][order.offer_type].acquire()
-            self.queues[order.symbol][order.offer_type].push(order)
+            self.queues[order.symbol][order.offer_type].push(order, order.order_id)
             self.locks[order.symbol][order.offer_type].release()
+
+    def cancel_order(self, order_id: int):
+        if order_id not in self.db:
+            raise ValueError(f"Order ID \"{order_id}\" not found in db")
+        order = self.db[order_id]
+        self.logger.info(f"[{current_thread().name} {current_thread().native_id}] Cancelled Order: {order}")
+        self.locks[order.symbol][order.offer_type].acquire()
+        self.queues[order.symbol][order.offer_type].delete(order_id)
+        self.locks[order.symbol][order.offer_type].release()
+        del self.db[order_id]
+        return order
 
     def view_orders(self, symbol, include_expired: bool = False, size: int = None) -> str:
         ask_view = self.queues[symbol]["ask"].top_n(size)
         bid_view = self.queues[symbol]["bid"].top_n(size)
         table = PrettyTable(["Symbol", "Type", "Price", "Volume", "Order ID", "Created", "Time Left"])
-        for order in ask_view[::-1]:
+        for order, _ in ask_view[::-1]:
             if not include_expired and not order.is_valid():
                 continue
             table.add_row([order.symbol, order.offer_type, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
         table.add_row(["-"] * len(table.field_names))
-        for order in bid_view:
+        for order, _ in bid_view:
             if not include_expired and not order.is_valid():
                 continue
             table.add_row([order.symbol, order.offer_type, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
@@ -163,19 +176,23 @@ web = Flask(__name__)
 engine = MatchingEngine(logger=web.logger)
 
 
-@web.route("/order", methods=["GET", "POST"])
+@web.route("/order", methods=["GET", "POST", "DELETE"])
 def order():
-    if request.method == "POST":
-        data = request.get_json()
-        order = Order(data["order_id"], data["symbol"], data["offer_type"], data["price"], data["volume"], data["account"], data["expire_sec"])
-        engine.accept_order(order)
-        return Response(response=f"Posted order: {data}\n", content_type='text/plain; chatset=utf-8', status=200)
-    elif request.method == "GET":
+    if request.method == "GET":
         symbol = request.args.get("symbol")
         size = int(request.args.get("size")) if "size" in request.args else None
         include_expired = True if "include_expired" in request.args else False
         view = engine.view_orders(symbol, include_expired, size)
         return Response(response=view, content_type='text/plain; chatset=utf-8', status=200)
+    elif request.method == "POST":
+        data = request.get_json()
+        order = Order(int(data["order_id"]), data["symbol"], data["offer_type"], data["price"], data["volume"], data["account"], data["expire_sec"])
+        engine.accept_order(order)
+        return Response(response=f"Posted order: {order}\n", content_type='text/plain; chatset=utf-8', status=200)
+    elif request.method == "DELETE":
+        order_id = int(request.args.get("order_id"))
+        order = engine.cancel_order(order_id)
+        return Response(response=f"Cancelled order: {order}\n", content_type='text/plain; chatset=utf-8', status=200)
 
 
 @web.route("/history", methods=["GET"])
@@ -214,15 +231,16 @@ orders=(
 for order in ${orders[@]}; do curl -X POST http://localhost:9999/order -H 'Content-Type: application/json' -d "${order}"; done
 
 curl "http://localhost:9999/order?symbol=MSFT"
+curl -X DELETE "http://localhost:9999/order?order_id=1"
+curl "http://localhost:9999/order?symbol=MSFT"
 curl "http://localhost:9999/history"
 curl "http://localhost:9999/order?symbol=MSFT&include_expired"
 curl "http://localhost:9999/order?symbol=MSFT&size=2"
-"""
-"""
+
+
 exec(open("matching_engine.py").read())
 m = MatchingEngine()
 m.load_symbols(["AAPL", "MSFT"])
-m.start_workers()
 orders = [
     Order(order_id=1, symbol="MSFT", offer_type="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
     Order(order_id=2, symbol="MSFT", offer_type="ask", price=180, volume=5, account="Trader_B", expire_sec=600),
@@ -238,6 +256,6 @@ orders = [
     Order(order_id=12, symbol="MSFT", offer_type="bid", price=190, volume=1, account="Trader_I", expire_sec=600)
 ]
 order_itr = iter(orders)
-m.match(next(order_itr))
+m.accept_order(next(order_itr))
 """
 
