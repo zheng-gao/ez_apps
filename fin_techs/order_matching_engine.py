@@ -15,19 +15,19 @@ logger.addHandler(logging.StreamHandler())
 
 
 class Order:
-    def __init__(self, order_id: int, symbol: str, side: str, price: float, volume: int, account: str, expire_sec: int):
+    def __init__(self, order_id: int, symbol: str, side: str, price: float, quantity: int, account: str, expire_sec: int):
         self.order_id = order_id
         self.symbol = symbol
         self.side = side
         self.price = price
-        self.volume = volume
+        self.quantity = quantity
         self.account = account
         self.time = datetime.now()
         self.expire_sec = expire_sec
 
     def __str__(self):
         return "{" + f"\"order_id\": {self.order_id}, \"symbol\": \"{self.symbol}\", \"side\": \"{self.side}\", \"price\": {self.price}, " +\
-                     f"\"volume\": {self.volume}, \"account\": \"{self.account}\", \"time\": \"{self.time}\", \"expire_sec\": {self.expire_sec}" + "}"
+                     f"\"quantity\": {self.quantity}, \"account\": \"{self.account}\", \"time\": \"{self.time}\", \"expire_sec\": {self.expire_sec}" + "}"
 
     def check_type(self, other):
         if not isinstance(other, type(self)): 
@@ -44,7 +44,7 @@ class Order:
             return True
         if other.time < self.time:    # Max Heap should always put earlier order on top
             return False
-        return self.volume > other.volume
+        return self.quantity > other.quantity
 
     def __lt__(self, other):
         self.check_type(other)
@@ -56,7 +56,7 @@ class Order:
             return True
         if other.time < self.time:
             return False
-        return self.volume < other.volume
+        return self.quantity < other.quantity
 
     def time_left(self) -> str:
         tl = self.time + timedelta(seconds=self.expire_sec) - datetime.now() if self.is_valid() else timedelta(seconds=0)
@@ -100,22 +100,22 @@ class MatchingEngine:
                 if (order.side == "ask" and order.price <= q_top_order.price) or (order.side == "bid" and order.price >= q_top_order.price):
                     queue.pop()
                     order_copy, q_top_order_copy = deepcopy(order), deepcopy(q_top_order)
-                    volume_filled = min(order.volume, q_top_order.volume)
-                    order.volume -= volume_filled
-                    q_top_order.volume -= volume_filled
-                    if q_top_order.volume > 0:
-                        queue.push(q_top_order, q_top_order.order_id)  # push back residual volume
+                    quantity_filled = min(order.quantity, q_top_order.quantity)
+                    order.quantity -= quantity_filled
+                    q_top_order.quantity -= quantity_filled
+                    if q_top_order.quantity > 0:
+                        queue.push(q_top_order, q_top_order.order_id)  # push back residual quantity
                     match_result = {
                         "accepted_order": json.loads(str(order_copy)),
                         "matched_order": json.loads(str(q_top_order_copy)),
-                        "volume_filled": volume_filled,
+                        "quantity_filled": quantity_filled,
                         "final_price": q_top_order.price,
                         "price_gap": abs(order.price - q_top_order.price),
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
                     }
                     self.history.append(match_result)
                     self.logger.info(f"Matched Orders: {match_result}")
-                    if order.volume == 0:
+                    if order.quantity == 0:
                         return
                 else:
                     return
@@ -127,7 +127,7 @@ class MatchingEngine:
         self.locks[order.symbol][other_side].acquire()
         self._match(order, self.queues[order.symbol][other_side])
         self.locks[order.symbol][other_side].release()
-        if order.volume > 0:
+        if order.quantity > 0:
             self.locks[order.symbol][order.side].acquire()
             self.queues[order.symbol][order.side].push(order, order.order_id)
             self.locks[order.symbol][order.side].release()
@@ -146,16 +146,16 @@ class MatchingEngine:
     def view_orders(self, symbol, include_expired: bool = False, size: int = None) -> str:
         ask_view = self.queues[symbol]["ask"].top_n(size)
         bid_view = self.queues[symbol]["bid"].top_n(size)
-        table = PrettyTable(["Symbol", "Type", "Price", "Volume", "Order ID", "Created", "Time Left"])
+        table = PrettyTable(["Symbol", "Type", "Price", "Quantity", "Order ID", "Created", "Time Left"])
         for order, _ in ask_view[::-1]:
             if not include_expired and not order.is_valid():
                 continue
-            table.add_row([order.symbol, order.side, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
+            table.add_row([order.symbol, order.side, order.price, order.quantity, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
         table.add_row(["-"] * len(table.field_names))
         for order, _ in bid_view:
             if not include_expired and not order.is_valid():
                 continue
-            table.add_row([order.symbol, order.side, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
+            table.add_row([order.symbol, order.side, order.price, order.quantity, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
         return table.get_string() + "\n"
 
 
@@ -186,7 +186,7 @@ def order():
         return Response(response=view, content_type='text/plain; chatset=utf-8', status=200)
     elif request.method == "POST":
         data = request.get_json()
-        order = Order(int(data["order_id"]), data["symbol"], data["side"], data["price"], data["volume"], data["account"], data["expire_sec"])
+        order = Order(int(data["order_id"]), data["symbol"], data["side"], data["price"], data["quantity"], data["account"], data["expire_sec"])
         engine.accept_order(order)
         return Response(response=f"Posted order: {order}\n", content_type='text/plain; chatset=utf-8', status=200)
     elif request.method == "DELETE":
@@ -212,20 +212,20 @@ if __name__ == "__main__":
 
 """
 orders=(
-    '{"order_id":"1","symbol":"MSFT","side":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"2","symbol":"MSFT","side":"ask","price":180,"volume":5,"account":"Trader_B","expire_sec":20}'
-    '{"order_id":"3","symbol":"MSFT","side":"ask","price":170,"volume":2,"account":"Trader_B","expire_sec":1}'
-    '{"order_id":"4","symbol":"AAPL","side":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"5","symbol":"MSFT","side":"bid","price":170,"volume":4,"account":"Trader_C","expire_sec":20}'
-    '{"order_id":"6","symbol":"MSFT","side":"bid","price":150,"volume":1,"account":"Trader_D","expire_sec":20}'
-    '{"order_id":"7","symbol":"MSFT","side":"ask","price":170,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"8","symbol":"MSFT","side":"bid","price":160,"volume":2,"account":"Trader_E","expire_sec":20}'
-    '{"order_id":"9","symbol":"MSFT","side":"ask","price":190,"volume":4,"account":"Trader_F","expire_sec":20}'
-    '{"order_id":"10","symbol":"MSFT","side":"bid","price":185,"volume":5,"account":"Trader_G","expire_sec":20}'
-    '{"order_id":"11","symbol":"AAPL","side":"bid","price":210,"volume":3,"account":"Trader_E","expire_sec":20}'
-    '{"order_id":"12","symbol":"MSFT","side":"ask","price":175,"volume":2,"account":"Trader_H","expire_sec":20}'
-    '{"order_id":"13","symbol":"MSFT","side":"bid","price":190,"volume":1,"account":"Trader_I","expire_sec":20}'
-    '{"order_id":"14","symbol":"MSFT","side":"bid","price":160,"volume":3,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"1","symbol":"MSFT","side":"ask","price":200,"quantity":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"2","symbol":"MSFT","side":"ask","price":180,"quantity":5,"account":"Trader_B","expire_sec":20}'
+    '{"order_id":"3","symbol":"MSFT","side":"ask","price":170,"quantity":2,"account":"Trader_B","expire_sec":1}'
+    '{"order_id":"4","symbol":"AAPL","side":"ask","price":200,"quantity":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"5","symbol":"MSFT","side":"bid","price":170,"quantity":4,"account":"Trader_C","expire_sec":20}'
+    '{"order_id":"6","symbol":"MSFT","side":"bid","price":150,"quantity":1,"account":"Trader_D","expire_sec":20}'
+    '{"order_id":"7","symbol":"MSFT","side":"ask","price":170,"quantity":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"8","symbol":"MSFT","side":"bid","price":160,"quantity":2,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"9","symbol":"MSFT","side":"ask","price":190,"quantity":4,"account":"Trader_F","expire_sec":20}'
+    '{"order_id":"10","symbol":"MSFT","side":"bid","price":185,"quantity":5,"account":"Trader_G","expire_sec":20}'
+    '{"order_id":"11","symbol":"AAPL","side":"bid","price":210,"quantity":3,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"12","symbol":"MSFT","side":"ask","price":175,"quantity":2,"account":"Trader_H","expire_sec":20}'
+    '{"order_id":"13","symbol":"MSFT","side":"bid","price":190,"quantity":1,"account":"Trader_I","expire_sec":20}'
+    '{"order_id":"14","symbol":"MSFT","side":"bid","price":160,"quantity":3,"account":"Trader_E","expire_sec":20}'
 )
 
 for order in ${orders[@]}; do curl -X POST http://localhost:9999/order -H 'Content-Type: application/json' -d "${order}"; done
@@ -242,18 +242,18 @@ exec(open("matching_engine.py").read())
 m = MatchingEngine()
 m.load_symbols(["AAPL", "MSFT"])
 orders = [
-    Order(order_id=1, symbol="MSFT", side="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
-    Order(order_id=2, symbol="MSFT", side="ask", price=180, volume=5, account="Trader_B", expire_sec=600),
-    Order(order_id=3, symbol="MSFT", side="ask", price=170, volume=2, account="Trader_B", expire_sec=1),
-    Order(order_id=4, symbol="AAPL", side="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
-    Order(order_id=5, symbol="MSFT", side="bid", price=170, volume=4, account="Trader_C", expire_sec=600),
-    Order(order_id=6, symbol="MSFT", side="bid", price=150, volume=1, account="Trader_D", expire_sec=600),
-    Order(order_id=7, symbol="MSFT", side="bid", price=160, volume=2, account="Trader_E", expire_sec=600),
-    Order(order_id=8, symbol="MSFT", side="ask", price=190, volume=4, account="Trader_F", expire_sec=600),
-    Order(order_id=9, symbol="MSFT", side="bid", price=185, volume=5, account="Trader_G", expire_sec=600),
-    Order(order_id=10, symbol="AAPL", side="bid", price=210, volume=3, account="Trader_E", expire_sec=600),
-    Order(order_id=11, symbol="MSFT", side="ask", price=175, volume=2, account="Trader_H", expire_sec=600),
-    Order(order_id=12, symbol="MSFT", side="bid", price=190, volume=1, account="Trader_I", expire_sec=600)
+    Order(order_id=1, symbol="MSFT", side="ask", price=200, quantity=3, account="Trader_A", expire_sec=600),
+    Order(order_id=2, symbol="MSFT", side="ask", price=180, quantity=5, account="Trader_B", expire_sec=600),
+    Order(order_id=3, symbol="MSFT", side="ask", price=170, quantity=2, account="Trader_B", expire_sec=1),
+    Order(order_id=4, symbol="AAPL", side="ask", price=200, quantity=3, account="Trader_A", expire_sec=600),
+    Order(order_id=5, symbol="MSFT", side="bid", price=170, quantity=4, account="Trader_C", expire_sec=600),
+    Order(order_id=6, symbol="MSFT", side="bid", price=150, quantity=1, account="Trader_D", expire_sec=600),
+    Order(order_id=7, symbol="MSFT", side="bid", price=160, quantity=2, account="Trader_E", expire_sec=600),
+    Order(order_id=8, symbol="MSFT", side="ask", price=190, quantity=4, account="Trader_F", expire_sec=600),
+    Order(order_id=9, symbol="MSFT", side="bid", price=185, quantity=5, account="Trader_G", expire_sec=600),
+    Order(order_id=10, symbol="AAPL", side="bid", price=210, quantity=3, account="Trader_E", expire_sec=600),
+    Order(order_id=11, symbol="MSFT", side="ask", price=175, quantity=2, account="Trader_H", expire_sec=600),
+    Order(order_id=12, symbol="MSFT", side="bid", price=190, quantity=1, account="Trader_I", expire_sec=600)
 ]
 order_itr = iter(orders)
 m.accept_order(next(order_itr))
