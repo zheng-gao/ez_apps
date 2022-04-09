@@ -15,10 +15,10 @@ logger.addHandler(logging.StreamHandler())
 
 
 class Order:
-    def __init__(self, order_id: int, symbol: str, offer_type: str, price: float, volume: int, account: str, expire_sec: int):
+    def __init__(self, order_id: int, symbol: str, side: str, price: float, volume: int, account: str, expire_sec: int):
         self.order_id = order_id
         self.symbol = symbol
-        self.offer_type = offer_type
+        self.side = side
         self.price = price
         self.volume = volume
         self.account = account
@@ -26,7 +26,7 @@ class Order:
         self.expire_sec = expire_sec
 
     def __str__(self):
-        return "{" + f"\"order_id\": {self.order_id}, \"symbol\": \"{self.symbol}\", \"offer_type\": \"{self.offer_type}\", \"price\": {self.price}, " +\
+        return "{" + f"\"order_id\": {self.order_id}, \"symbol\": \"{self.symbol}\", \"side\": \"{self.side}\", \"price\": {self.price}, " +\
                      f"\"volume\": {self.volume}, \"account\": \"{self.account}\", \"time\": \"{self.time}\", \"expire_sec\": {self.expire_sec}" + "}"
 
     def check_type(self, other):
@@ -97,7 +97,7 @@ class MatchingEngine:
                 queue.pop()
                 self.logger.info(f"Order Expired: {q_top_order}")
             else:
-                if (order.offer_type == "ask" and order.price <= q_top_order.price) or (order.offer_type == "bid" and order.price >= q_top_order.price):
+                if (order.side == "ask" and order.price <= q_top_order.price) or (order.side == "bid" and order.price >= q_top_order.price):
                     queue.pop()
                     order_copy, q_top_order_copy = deepcopy(order), deepcopy(q_top_order)
                     volume_filled = min(order.volume, q_top_order.volume)
@@ -123,23 +123,23 @@ class MatchingEngine:
     def accept_order(self, order: Order):
         self.logger.info(f"[{current_thread().name} {current_thread().native_id}] Accepted Order: {order}")
         self.db[order.order_id] = order  # persist the order
-        other_offer_type = "ask" if order.offer_type == "bid" else "bid"
-        self.locks[order.symbol][other_offer_type].acquire()
-        self._match(order, self.queues[order.symbol][other_offer_type])
-        self.locks[order.symbol][other_offer_type].release()
+        other_side = "ask" if order.side == "bid" else "bid"
+        self.locks[order.symbol][other_side].acquire()
+        self._match(order, self.queues[order.symbol][other_side])
+        self.locks[order.symbol][other_side].release()
         if order.volume > 0:
-            self.locks[order.symbol][order.offer_type].acquire()
-            self.queues[order.symbol][order.offer_type].push(order, order.order_id)
-            self.locks[order.symbol][order.offer_type].release()
+            self.locks[order.symbol][order.side].acquire()
+            self.queues[order.symbol][order.side].push(order, order.order_id)
+            self.locks[order.symbol][order.side].release()
 
     def cancel_order(self, order_id: int):
         if order_id not in self.db:
             raise ValueError(f"Order ID \"{order_id}\" not found in db")
         order = self.db[order_id]
         self.logger.info(f"[{current_thread().name} {current_thread().native_id}] Cancelled Order: {order}")
-        self.locks[order.symbol][order.offer_type].acquire()
-        self.queues[order.symbol][order.offer_type].delete(order_id)
-        self.locks[order.symbol][order.offer_type].release()
+        self.locks[order.symbol][order.side].acquire()
+        self.queues[order.symbol][order.side].delete(order_id)
+        self.locks[order.symbol][order.side].release()
         del self.db[order_id]
         return order
 
@@ -150,12 +150,12 @@ class MatchingEngine:
         for order, _ in ask_view[::-1]:
             if not include_expired and not order.is_valid():
                 continue
-            table.add_row([order.symbol, order.offer_type, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
+            table.add_row([order.symbol, order.side, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
         table.add_row(["-"] * len(table.field_names))
         for order, _ in bid_view:
             if not include_expired and not order.is_valid():
                 continue
-            table.add_row([order.symbol, order.offer_type, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
+            table.add_row([order.symbol, order.side, order.price, order.volume, order.order_id, order.time.strftime("%Y-%m-%d %H:%M:%S"), order.time_left()])
         return table.get_string() + "\n"
 
 
@@ -186,7 +186,7 @@ def order():
         return Response(response=view, content_type='text/plain; chatset=utf-8', status=200)
     elif request.method == "POST":
         data = request.get_json()
-        order = Order(int(data["order_id"]), data["symbol"], data["offer_type"], data["price"], data["volume"], data["account"], data["expire_sec"])
+        order = Order(int(data["order_id"]), data["symbol"], data["side"], data["price"], data["volume"], data["account"], data["expire_sec"])
         engine.accept_order(order)
         return Response(response=f"Posted order: {order}\n", content_type='text/plain; chatset=utf-8', status=200)
     elif request.method == "DELETE":
@@ -212,20 +212,20 @@ if __name__ == "__main__":
 
 """
 orders=(
-    '{"order_id":"1","symbol":"MSFT","offer_type":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"2","symbol":"MSFT","offer_type":"ask","price":180,"volume":5,"account":"Trader_B","expire_sec":20}'
-    '{"order_id":"3","symbol":"MSFT","offer_type":"ask","price":170,"volume":2,"account":"Trader_B","expire_sec":1}'
-    '{"order_id":"4","symbol":"AAPL","offer_type":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"5","symbol":"MSFT","offer_type":"bid","price":170,"volume":4,"account":"Trader_C","expire_sec":20}'
-    '{"order_id":"6","symbol":"MSFT","offer_type":"bid","price":150,"volume":1,"account":"Trader_D","expire_sec":20}'
-    '{"order_id":"7","symbol":"MSFT","offer_type":"ask","price":170,"volume":3,"account":"Trader_A","expire_sec":20}'
-    '{"order_id":"8","symbol":"MSFT","offer_type":"bid","price":160,"volume":2,"account":"Trader_E","expire_sec":20}'
-    '{"order_id":"9","symbol":"MSFT","offer_type":"ask","price":190,"volume":4,"account":"Trader_F","expire_sec":20}'
-    '{"order_id":"10","symbol":"MSFT","offer_type":"bid","price":185,"volume":5,"account":"Trader_G","expire_sec":20}'
-    '{"order_id":"11","symbol":"AAPL","offer_type":"bid","price":210,"volume":3,"account":"Trader_E","expire_sec":20}'
-    '{"order_id":"12","symbol":"MSFT","offer_type":"ask","price":175,"volume":2,"account":"Trader_H","expire_sec":20}'
-    '{"order_id":"13","symbol":"MSFT","offer_type":"bid","price":190,"volume":1,"account":"Trader_I","expire_sec":20}'
-    '{"order_id":"14","symbol":"MSFT","offer_type":"bid","price":160,"volume":3,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"1","symbol":"MSFT","side":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"2","symbol":"MSFT","side":"ask","price":180,"volume":5,"account":"Trader_B","expire_sec":20}'
+    '{"order_id":"3","symbol":"MSFT","side":"ask","price":170,"volume":2,"account":"Trader_B","expire_sec":1}'
+    '{"order_id":"4","symbol":"AAPL","side":"ask","price":200,"volume":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"5","symbol":"MSFT","side":"bid","price":170,"volume":4,"account":"Trader_C","expire_sec":20}'
+    '{"order_id":"6","symbol":"MSFT","side":"bid","price":150,"volume":1,"account":"Trader_D","expire_sec":20}'
+    '{"order_id":"7","symbol":"MSFT","side":"ask","price":170,"volume":3,"account":"Trader_A","expire_sec":20}'
+    '{"order_id":"8","symbol":"MSFT","side":"bid","price":160,"volume":2,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"9","symbol":"MSFT","side":"ask","price":190,"volume":4,"account":"Trader_F","expire_sec":20}'
+    '{"order_id":"10","symbol":"MSFT","side":"bid","price":185,"volume":5,"account":"Trader_G","expire_sec":20}'
+    '{"order_id":"11","symbol":"AAPL","side":"bid","price":210,"volume":3,"account":"Trader_E","expire_sec":20}'
+    '{"order_id":"12","symbol":"MSFT","side":"ask","price":175,"volume":2,"account":"Trader_H","expire_sec":20}'
+    '{"order_id":"13","symbol":"MSFT","side":"bid","price":190,"volume":1,"account":"Trader_I","expire_sec":20}'
+    '{"order_id":"14","symbol":"MSFT","side":"bid","price":160,"volume":3,"account":"Trader_E","expire_sec":20}'
 )
 
 for order in ${orders[@]}; do curl -X POST http://localhost:9999/order -H 'Content-Type: application/json' -d "${order}"; done
@@ -233,7 +233,7 @@ for order in ${orders[@]}; do curl -X POST http://localhost:9999/order -H 'Conte
 curl "http://localhost:9999/order?symbol=MSFT"
 curl -X DELETE "http://localhost:9999/order?order_id=1"
 curl "http://localhost:9999/order?symbol=MSFT"
-curl "http://localhost:9999/history"
+curl "http://localhost:9999/history" | jq
 curl "http://localhost:9999/order?symbol=MSFT&include_expired"
 curl "http://localhost:9999/order?symbol=MSFT&size=2"
 
@@ -242,18 +242,18 @@ exec(open("matching_engine.py").read())
 m = MatchingEngine()
 m.load_symbols(["AAPL", "MSFT"])
 orders = [
-    Order(order_id=1, symbol="MSFT", offer_type="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
-    Order(order_id=2, symbol="MSFT", offer_type="ask", price=180, volume=5, account="Trader_B", expire_sec=600),
-    Order(order_id=3, symbol="MSFT", offer_type="ask", price=170, volume=2, account="Trader_B", expire_sec=1),
-    Order(order_id=4, symbol="AAPL", offer_type="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
-    Order(order_id=5, symbol="MSFT", offer_type="bid", price=170, volume=4, account="Trader_C", expire_sec=600),
-    Order(order_id=6, symbol="MSFT", offer_type="bid", price=150, volume=1, account="Trader_D", expire_sec=600),
-    Order(order_id=7, symbol="MSFT", offer_type="bid", price=160, volume=2, account="Trader_E", expire_sec=600),
-    Order(order_id=8, symbol="MSFT", offer_type="ask", price=190, volume=4, account="Trader_F", expire_sec=600),
-    Order(order_id=9, symbol="MSFT", offer_type="bid", price=185, volume=5, account="Trader_G", expire_sec=600),
-    Order(order_id=10, symbol="AAPL", offer_type="bid", price=210, volume=3, account="Trader_E", expire_sec=600),
-    Order(order_id=11, symbol="MSFT", offer_type="ask", price=175, volume=2, account="Trader_H", expire_sec=600),
-    Order(order_id=12, symbol="MSFT", offer_type="bid", price=190, volume=1, account="Trader_I", expire_sec=600)
+    Order(order_id=1, symbol="MSFT", side="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
+    Order(order_id=2, symbol="MSFT", side="ask", price=180, volume=5, account="Trader_B", expire_sec=600),
+    Order(order_id=3, symbol="MSFT", side="ask", price=170, volume=2, account="Trader_B", expire_sec=1),
+    Order(order_id=4, symbol="AAPL", side="ask", price=200, volume=3, account="Trader_A", expire_sec=600),
+    Order(order_id=5, symbol="MSFT", side="bid", price=170, volume=4, account="Trader_C", expire_sec=600),
+    Order(order_id=6, symbol="MSFT", side="bid", price=150, volume=1, account="Trader_D", expire_sec=600),
+    Order(order_id=7, symbol="MSFT", side="bid", price=160, volume=2, account="Trader_E", expire_sec=600),
+    Order(order_id=8, symbol="MSFT", side="ask", price=190, volume=4, account="Trader_F", expire_sec=600),
+    Order(order_id=9, symbol="MSFT", side="bid", price=185, volume=5, account="Trader_G", expire_sec=600),
+    Order(order_id=10, symbol="AAPL", side="bid", price=210, volume=3, account="Trader_E", expire_sec=600),
+    Order(order_id=11, symbol="MSFT", side="ask", price=175, volume=2, account="Trader_H", expire_sec=600),
+    Order(order_id=12, symbol="MSFT", side="bid", price=190, volume=1, account="Trader_I", expire_sec=600)
 ]
 order_itr = iter(orders)
 m.accept_order(next(order_itr))
