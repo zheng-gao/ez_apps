@@ -95,42 +95,81 @@ class Rectangle(Shape):
 
 
 class Board:
-    def __init__(self, row: int, col: int):
+    def __init__(self, row: int, col: int, background_color: str = "White"):
         self.row_max = row
         self.col_max = col
-        self.layer_max = 0
-        self.shapes = list()
-        self.matrix = [[None for _ in range(col)] for _ in range(row)]
+        self.shapes = dict()  # <Shape, int_layer>
+        self.layers = list()
+        self.matrix = None
+        self.background_color = background_color
 
     def clear(self):
-        for r in range(self.row_max):
-            for c in range(self.col_max):
-                self.matrix[r][c] = Grid(color="White")
+        self.matrix = [[Grid(color=self.background_color) for _ in range(self.col_max)] for _ in range(self.row_max)]
 
     def print(self):
         self.clear()
-        for s in self.shapes:
-            for r, c, g in s.generate_grids():
-                self.matrix[r][c] = g
+        for shapes in self.layers:
+            for s in shapes:
+                for r, c, g in s.generate_grids():
+                    self.matrix[r][c] = g
         for r in range(self.row_max):
             for c in range(self.col_max):
                 print(self.matrix[r][c], end="")
             print()
 
-    def draw(self, shape: Shape):
-        self.shapes.append(shape)
+    def draw(self, shape: Shape, layer: int = -1):
+        if layer == -1:
+            self.layers.append(set())
+            layer = len(self.layers) - 1
+        while layer > len(self.layers) - 1:
+            self.layers.append(set())
+        self.shapes[shape] = layer
+        self.layers[layer].add(shape)
+
+    def layer_move(self, shape: Shape, layer_offset: int):
+        if shape in self.shapes:
+            layer = self.shapes[shape]
+            self.layers[layer].remove(shape)
+            self.draw(shape, layer + layer_offset)
+
+    def layer_swap(self, shape_1: Shape, shape_2: Shape):
+        if shape_1 in self.shapes and shape_2 in self.shapes:
+            layer_1, layer_2 = self.shapes[shape_1], self.shapes[shape_2]
+            if layer_1 != layer_2:
+                self.layers[layer_1].remove(shape_1)
+                self.layers[layer_2].remove(shape_2)
+                self.draw(shape_1, layer_2)
+                self.draw(shape_2, layer_1)
+
+    def delete(self, shape: Shape):
+        if shape in self.shapes:
+            layer = self.shapes[shape]
+            del self.shapes[shape]
+            self.layers[layer].remove(shape)
 
 
-
+print("Draw a line, a blue rectangle and a green square with red border")
 board = Board(9, 9)
-line = Line(Point(2, 7), Point(7, 2))
+line = Line(Point(1, 7), Point(7, 1))
 board.draw(line)
-rectangle = Rectangle(Point(2, 3), Point(6, 5), outline_color="Green", filled_color="Green")
-board.draw(rectangle)
+rectangle_1 = Rectangle(Point(1, 1), Point(3, 4), outline_color="Blue", filled_color="Blue")
+rectangle_2 = Rectangle(Point(3, 4), Point(6, 7), outline_color="Red", filled_color="Green")
+board.draw(rectangle_1)
+board.draw(rectangle_2)
 board.print()
-print()
-rectangle.move(Point(-1, -2))
+print("Move the square up by 1 step and left by 2 steps")
+rectangle_2.move(Point(-1, -2))
 board.print()
+print("Layer up the blue rectangle")
+board.layer_move(rectangle_1, 1)
+board.print()
+print("Layer swap the blue rectangle and the red/green square")
+board.layer_swap(rectangle_2, line)
+board.print()
+print("Delete the red/green square")
+board.delete(rectangle_2)
+board.print()
+
 
 
 
