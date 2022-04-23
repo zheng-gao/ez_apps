@@ -1,3 +1,5 @@
+# from collections import deque
+
 COLOR = {
     "Black":  "\033[30m",
     "Red":    "\033[41m",
@@ -96,24 +98,35 @@ class Rectangle(Shape):
 
 class Board:
     def __init__(self, row: int, col: int, background_color: str = "White"):
-        self.row_max = row
-        self.col_max = col
+        self.row_len = row
+        self.col_len = col
         self.shapes = dict()  # <Shape, int_layer>
         self.layers = list()
         self.matrix = None
         self.background_color = background_color
 
     def clear(self):
-        self.matrix = [[Grid(color=self.background_color) for _ in range(self.col_max)] for _ in range(self.row_max)]
+        # self.matrix = deque([deque([Grid(color=self.background_color) for _ in range(self.col_len)]) for _ in range(self.row_len)])
+        self.matrix = [[Grid(color=self.background_color) for _ in range(self.col_len)] for _ in range(self.row_len)]
+
+    def expand(self, row, col):
+        while row >= len(self.matrix):
+            self.matrix.append([Grid(color=self.background_color) for _ in range(self.col_len)])
+        self.row_len = len(self.matrix)
+        while col >= len(self.matrix[0]):
+            for r in range(self.row_len):
+                self.matrix[r].append(Grid(color=self.background_color))
+        self.col_len = len(self.matrix[0])
 
     def print(self):
         self.clear()
         for shapes in self.layers:
             for s in shapes:
                 for r, c, g in s.generate_grids():
+                    self.expand(r, c)
                     self.matrix[r][c] = g
-        for r in range(self.row_max):
-            for c in range(self.col_max):
+        for r in range(self.row_len):
+            for c in range(self.col_len):
                 print(self.matrix[r][c], end="")
             print()
 
@@ -168,6 +181,9 @@ board.layer_swap(rectangle_2, line)
 board.print()
 print("Delete the red/green square")
 board.delete(rectangle_2)
+board.print()
+print("Move the line out of the border and force the board to expand")
+line.move(Point(3, 4))
 board.print()
 
 
